@@ -14,69 +14,50 @@ jobs:
           npx playwright install chromium
           npx playwright install-deps chromium
       
-      - name: Click Download Buttons on All Sites
+      - name: Extract Final CDN URLs and Test Downloads
         run: |
           cat > scrape.mjs << 'NODEEOF'
           import { chromium } from 'playwright';
+          import { createWriteStream, existsSync, mkdirSync } from 'fs';
+          import { get } from 'https';
+          import { get as httpGet } from 'http';
 
           const browser = await chromium.launch({ headless: true });
+          const finalResults = {};
           
           const tasks = [
             {
-              name: 'FZMoviesCC',
-              movieUrl: 'https://fzmovies.cc/movie-Men%20in%20Black%20International--hmp4.htm',
-              steps: [
-                { desc: 'Click 480p download', selector: 'a[href*="download1.php"]' },
-                { desc: 'Click download button on next page', selector: 'a[href*="download"], button, input[type="submit"]', waitAfter: 5000 },
-              ]
-            },
-            {
-              name: 'MobileTVShows',
-              movieUrl: 'https://mobiletvshows.site/subfolder-New%20Girl.htm',
-              steps: [
-                { desc: 'Click High MP4', selector: 'a[href*="episode.php"][href*="ftype=2"]' },
-                { desc: 'Click download on episode page', selector: 'a[href*="downloadmp4"], a:has-text("Download"), button', waitAfter: 5000 },
-              ]
-            },
-            {
-              name: 'FZTVSeries',
-              movieUrl: 'https://fztvseries.live/subfolder-New%20Girl.htm',
-              steps: [
-                { desc: 'Click High MP4', selector: 'a[href*="episode.php"][href*="ftype=2"]' },
-                { desc: 'Click download on episode page', selector: 'a[href*="downloadmp4"], a:has-text("Download"), button', waitAfter: 5000 },
-              ]
-            },
-            {
-              name: 'TVSeriesIN',
-              movieUrl: 'https://tvseries.in',
-              steps: [
-                { desc: 'Click first episode', selector: 'a[href*="episode.php"]' },
-                { desc: 'Click download', selector: 'a[href*="download"], a:has-text("Download"), button', waitAfter: 5000 },
-              ]
-            },
-            {
-              name: 'FZMoviesLive',
-              movieUrl: 'https://fzmovies.live',
-              steps: [
-                { desc: 'Click first movie', selector: 'a[href*="movie-"][href*="hmp4"]' },
-                { desc: 'Click download', selector: 'a[href*="download1.php"]', waitAfter: 3000 },
-                { desc: 'Click download button', selector: 'a:has-text("Download"), button, input[type="submit"]', waitAfter: 5000 },
-              ]
-            },
-            {
-              name: 'Net9ja',
-              movieUrl: 'https://www.net9ja.tv/above-the-line-2025/',
+              name: 'Net9ja-Movie',
+              url: 'https://www.net9ja.tv/above-the-line-2025/',
               steps: [
                 { desc: 'Click DOWNLOAD', selector: 'a:has-text("DOWNLOAD")' },
-                { desc: 'Click SDM download', selector: 'a[href*="sdm_process_download"], a.sdm_download', waitAfter: 5000 },
+                { desc: 'Extract kissorgrab CDN from meetdownload', action: 'extractCDN', pattern: /location\.href\s*=\s*'(https:\/\/[^']+kissorgrab[^']+)'/ },
               ]
             },
             {
-              name: 'Net9jaSeries',
-              movieUrl: 'https://net9jaseries.com/avatar-the-last-airbender-season-2/',
+              name: 'Net9jaSeries-Wildshare',
+              url: 'https://net9jaseries.com/avatar-the-last-airbender-season-2/',
               steps: [
                 { desc: 'Click Episode 1', selector: 'a[href*="wildshare"]' },
-                { desc: 'Click Download on wildshare', selector: '.wildbutton, a:has-text("Download"), button', waitAfter: 5000 },
+                { desc: 'Click Download on wildshare', selector: '.wildbutton', waitAfter: 3000 },
+                { desc: 'Extract final URL after PT redirect', action: 'currentURL' },
+              ]
+            },
+            {
+              name: 'FZMoviesCC-Download',
+              url: 'https://fzmovies.cc/movie-Men%20in%20Black%20International--hmp4.htm',
+              steps: [
+                { desc: 'Click 480p download', selector: 'a[href*="download1.php"]' },
+                { desc: 'Wait and capture any video/file', action: 'captureRequests', waitAfter: 8000 },
+              ]
+            },
+            {
+              name: 'FZMoviesLive-Download',
+              url: 'https://fzmovies.live',
+              steps: [
+                { desc: 'Click first movie', selector: 'a[href*="movie-"][href*="hmp4"]' },
+                { desc: 'Click download link', selector: 'a[href*="download1.php"]', waitAfter: 3000 },
+                { desc: 'Capture file requests', action: 'captureRequests', waitAfter: 8000 },
               ]
             },
           ];
@@ -92,85 +73,153 @@ jobs:
               });
               const page = await context.newPage();
               
-              // Capture ALL requests
               const videoUrls = [];
-              const downloadUrls = [];
+              const fileResponses = [];
+              let extractedCDN = null;
               
+              // Capture video/file requests
               page.on('request', (req) => {
                 const u = req.url();
-                if (u.match(/\.(mp4|mkv|webm|avi|m3u8|mpd)(\?|$)/i)) {
+                if (u.match(/\.(mp4|mkv|webm|avi)(\?|$)/i) || u.includes('kissorgrab') || u.includes('zoologyfibre')) {
                   videoUrls.push(u);
-                  console.log(`  🎬 VIDEO: ${u.substring(0, 200)}`);
+                  console.log(`  🎬 VIDEO REQUEST: ${u.substring(0, 200)}`);
                 }
               });
               
               page.on('response', async (res) => {
                 const ct = res.headers()['content-type'] || '';
                 const cd = res.headers()['content-disposition'] || '';
-                if (ct.includes('video') || ct.includes('octet-stream') || cd.includes('attachment')) {
-                  downloadUrls.push({ url: res.url(), type: ct, disposition: cd, status: res.status() });
-                  console.log(`  ✅ FILE: HTTP ${res.status()} [${ct}] ${res.url().substring(0, 200)}`);
+                const cl = res.headers()['content-length'] || '';
+                if (ct.includes('video') || cd.includes('attachment') || ct.includes('octet-stream')) {
+                  fileResponses.push({
+                    url: res.url(),
+                    status: res.status(),
+                    type: ct,
+                    disposition: cd,
+                    size: cl ? `${(parseInt(cl)/1048576).toFixed(1)}MB` : 'unknown'
+                  });
+                  console.log(`  ✅ FILE: HTTP ${res.status()} [${ct}] ${cl ? (parseInt(cl)/1048576).toFixed(1)+'MB' : ''} - ${res.url().substring(0, 200)}`);
                 }
               });
               
               page.on('download', (dl) => {
-                console.log(`  📥 DOWNLOAD STARTED: ${dl.url()}`);
-                console.log(`  📁 Filename: ${dl.suggestedFilename()}`);
+                console.log(`  📥 DOWNLOAD: ${dl.url()} -> ${dl.suggestedFilename()}`);
               });
               
-              // Step 1: Go to movie page
-              console.log(`  Step 1: ${task.movieUrl}`);
-              await page.goto(task.movieUrl, { waitUntil: 'networkidle', timeout: 30000 });
+              // Go to starting page
+              console.log(`  Starting: ${task.url}`);
+              await page.goto(task.url, { waitUntil: 'networkidle', timeout: 30000 });
               
-              // Step 2+: Click through the chain
+              // Execute steps
               for (const step of task.steps) {
-                console.log(`  Step: ${step.desc} [${step.selector}]`);
-                try {
-                  const btn = await page.$(step.selector);
-                  if (btn) {
-                    // Check if it's a link we should navigate to, or a button to click
-                    const tagName = await btn.evaluate(el => el.tagName.toLowerCase());
-                    const href = await btn.evaluate(el => el.getAttribute('href'));
-                    const onclick = await btn.evaluate(el => el.getAttribute('onclick'));
+                console.log(`  Step: ${step.desc}`);
+                
+                if (step.action === 'extractCDN') {
+                  // Extract CDN URL from page content
+                  const html = await page.content();
+                  const match = html.match(step.pattern);
+                  if (match) {
+                    extractedCDN = match[1].replace(/\\\//g, '/');
+                    console.log(`  🎯 EXTRACTED CDN: ${extractedCDN.substring(0, 200)}`);
                     
-                    console.log(`    Tag: ${tagName}, href: ${href?.substring(0, 80)}, onclick: ${!!onclick}`);
-                    
-                    // Click it
-                    await btn.click();
-                    
-                    // Wait for things to happen
-                    const waitMs = step.waitAfter || 3000;
-                    console.log(`    Waiting ${waitMs}ms...`);
-                    await page.waitForTimeout(waitMs);
-                    
-                    console.log(`    Current URL: ${page.url().substring(0, 150)}`);
-                  } else {
-                    console.log(`    Button not found: ${step.selector}`);
+                    // Test the CDN URL
+                    try {
+                      const testResp = await page.request.get(extractedCDN, {
+                        headers: { 'Referer': page.url(), 'User-Agent': 'Mozilla/5.0' },
+                        timeout: 15000
+                      });
+                      const testCT = testResp.headers()['content-type'] || '';
+                      const testCL = testResp.headers()['content-length'] || '';
+                      console.log(`  🧪 TEST: HTTP ${testResp.status()} [${testCT}] ${testCL ? (parseInt(testCL)/1048576).toFixed(1)+'MB' : ''}`);
+                      if (testResp.status() === 200 || testResp.status() === 206) {
+                        console.log(`  ✅ CDN URL WORKS!`);
+                      }
+                    } catch(e) {
+                      console.log(`  ❌ CDN test failed: ${e.message}`);
+                    }
                   }
-                } catch(e) {
-                  console.log(`    Click error: ${e.message}`);
+                } else if (step.action === 'currentURL') {
+                  console.log(`  📍 Current URL: ${page.url().substring(0, 200)}`);
+                  extractedCDN = page.url();
+                  
+                  // Test if it's a downloadable URL
+                  try {
+                    const testResp = await page.request.get(page.url(), {
+                      headers: { 'Referer': 'https://wildshare.net/', 'User-Agent': 'Mozilla/5.0' },
+                      timeout: 15000
+                    });
+                    const testCT = testResp.headers()['content-type'] || '';
+                    const testCL = testResp.headers()['content-length'] || '';
+                    console.log(`  🧪 TEST: HTTP ${testResp.status()} [${testCT}] ${testCL ? (parseInt(testCL)/1048576).toFixed(1)+'MB' : ''}`);
+                  } catch(e) {
+                    console.log(`  ❌ URL test failed: ${e.message}`);
+                  }
+                } else if (step.action === 'captureRequests') {
+                  console.log(`  ⏳ Waiting ${step.waitAfter}ms for requests...`);
+                  await page.waitForTimeout(step.waitAfter);
+                  
+                  // Check current page for download triggers
+                  const html = await page.content();
+                  const onclickCDN = html.match(/location\.href\s*=\s*'(https:\/\/[^']+(?:kissorgrab|zoologyfibre|mp4|mkv)[^']*)'/i);
+                  if (onclickCDN) {
+                    extractedCDN = onclickCDN[1].replace(/\\\//g, '/');
+                    console.log(`  🎯 FOUND in onclick: ${extractedCDN.substring(0, 200)}`);
+                  }
+                } else {
+                  // Click step
+                  try {
+                    const btn = await page.$(step.selector);
+                    if (btn) {
+                      const tagName = await btn.evaluate(el => el.tagName.toLowerCase());
+                      const href = await btn.evaluate(el => el.getAttribute('href'));
+                      console.log(`    Clicking ${tagName}: ${href?.substring(0, 80)}`);
+                      await btn.click();
+                      await page.waitForTimeout(step.waitAfter || 3000);
+                      console.log(`    Landed: ${page.url().substring(0, 150)}`);
+                    } else {
+                      console.log(`    Button not found: ${step.selector}`);
+                    }
+                  } catch(e) {
+                    console.log(`    Click error: ${e.message}`);
+                  }
                 }
               }
               
-              // Final summary
-              console.log(`\n  === ${task.name} SUMMARY ===`);
-              console.log(`  Video requests: ${videoUrls.length}`);
-              console.log(`  File downloads: ${downloadUrls.length}`);
-              if (videoUrls.length > 0) {
-                console.log(`  🎬 ${videoUrls[0].substring(0, 200)}`);
-              }
-              if (downloadUrls.length > 0) {
-                downloadUrls.forEach(d => console.log(`  ✅ ${d.url.substring(0, 200)}`));
-              }
+              finalResults[task.name] = {
+                videoUrls: videoUrls.slice(0, 3),
+                fileResponses: fileResponses.slice(0, 3),
+                extractedCDN,
+                finalURL: page.url(),
+              };
+              
+              console.log(`\n  === ${task.name} RESULTS ===`);
+              console.log(`  Videos captured: ${videoUrls.length}`);
+              console.log(`  File responses: ${fileResponses.length}`);
+              console.log(`  Extracted CDN: ${extractedCDN ? '✅ YES' : '❌ NO'}`);
+              if (extractedCDN) console.log(`  ${extractedCDN.substring(0, 200)}`);
               
               await context.close();
             } catch(e) {
               console.log(`  Error: ${e.message}`);
+              finalResults[task.name] = { error: e.message };
             }
           }
           
           await browser.close();
-          console.log('\n\n✅ ALL DONE!');
+          
+          console.log('\n\n╔══════════════════════════════════════════╗');
+          console.log('║     FINAL DOWNLOAD URL SUMMARY           ║');
+          console.log('╚══════════════════════════════════════════╝');
+          for (const [name, result] of Object.entries(finalResults)) {
+            console.log(`\n${name}:`);
+            if (result.extractedCDN) {
+              console.log(`  ✅ ${result.extractedCDN}`);
+            } else if (result.videoUrls?.length > 0) {
+              console.log(`  🎬 ${result.videoUrls[0]}`);
+            } else {
+              console.log(`  ❌ No download URL found`);
+            }
+          }
           NODEEOF
           
           node scrape.mjs
