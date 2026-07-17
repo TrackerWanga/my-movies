@@ -1,0 +1,169 @@
+name: Discover Download URLs
+on:
+  workflow_dispatch:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Playwright
+        run: |
+          npm install playwright
+          npx playwright install chromium
+          npx playwright install-deps chromium
+      
+      - name: Scrape All Sites for Download URLs
+        run: |
+          node << 'NODEEOF'
+          const { chromium } = require('playwright');
+          
+          const sites = [
+            {
+              name: 'MobileTVShows',
+              searchUrl: 'https://mobiletvshows.site/subfolder-New%20Girl.htm',
+              downloadSelector: 'a[href*="downloadmp4.php"]',
+              episodeSelector: 'a[href*="episode.php"]',
+            },
+            {
+              name: 'FZTVSeries',
+              searchUrl: 'https://fztvseries.live/subfolder-New%20Girl.htm',
+              downloadSelector: 'a[href*="downloadmp4.php"]',
+              episodeSelector: 'a[href*="episode.php"]',
+            },
+            {
+              name: 'TVSeriesIN',
+              searchUrl: 'https://tvseries.in',
+              downloadSelector: 'a[href*="download"]',
+              episodeSelector: 'a[href*="episode"]',
+            },
+            {
+              name: 'FZMovies',
+              searchUrl: 'https://fzmovies.live',
+              downloadSelector: 'a[href*="download1.php"]',
+              episodeSelector: 'a[href*="movie-"]',
+            },
+            {
+              name: 'FZMoviesCC',
+              searchUrl: 'https://fzmovies.cc/movie-Men%20in%20Black%20International--hmp4.htm',
+              downloadSelector: 'a[href*="download1.php"]',
+              episodeSelector: null,
+            },
+            {
+              name: 'Net9ja',
+              searchUrl: 'https://www.net9ja.tv/above-the-line-2025/',
+              downloadSelector: 'a[href*="dldownload"]',
+              episodeSelector: null,
+            },
+            {
+              name: 'Net9jaSeries',
+              searchUrl: 'https://net9jaseries.com/avatar-the-last-airbender-season-2/',
+              downloadSelector: 'a[href*="wildshare"]',
+              episodeSelector: 'a[href*="Episode"]',
+            },
+            {
+              name: 'NaijaPrey',
+              searchUrl: 'https://www.naijaprey.tv/?s=above+the+line',
+              downloadSelector: 'a[href*="np-downloader"], a[href*="sdm_downloads"]',
+              episodeSelector: null,
+            },
+          ];
+          
+          const results = {};
+          
+          const browser = await chromium.launch({ headless: true });
+          
+          for (const site of sites) {
+            console.log(`\n=== ${site.name} ===`);
+            try {
+              const context = await browser.newContext({
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+              });
+              const page = await context.newPage();
+              
+              // Listen for downloads
+              page.on('download', async (download) => {
+                console.log(`  📥 DOWNLOAD STARTED: ${download.url()}`);
+                console.log(`  📁 Filename: ${download.suggestedFilename()}`);
+                try {
+                  await download.path();
+                } catch(e) {}
+              });
+              
+              // Track all network requests
+              page.on('request', (request) => {
+                const url = request.url();
+                if (url.match(/\.(mp4|mkv|webm|avi|m3u8|mpd)(\?|$)/i)) {
+                  console.log(`  🎬 VIDEO REQUEST: ${url.substring(0, 150)}`);
+                }
+                if (url.match(/download|redirect|go\.php|next\.php/i)) {
+                  console.log(`  🔄 REDIRECT: ${url.substring(0, 150)}`);
+                }
+              });
+              
+              page.on('response', async (response) => {
+                const url = response.url();
+                const ct = response.headers()['content-type'] || '';
+                if (ct.includes('video') || ct.includes('octet-stream')) {
+                  console.log(`  ✅ VIDEO RESPONSE: HTTP ${response.status()} - ${ct} - ${url.substring(0, 150)}`);
+                }
+              });
+              
+              console.log(`  Navigating to: ${site.searchUrl}`);
+              await page.goto(site.searchUrl, { waitUntil: 'networkidle', timeout: 30000 });
+              
+              // Find download links
+              if (site.downloadSelector) {
+                const downloadLinks = await page.$$eval(site.downloadSelector, els => 
+                  els.map(el => ({ href: el.getAttribute('href'), text: el.textContent?.trim()?.substring(0, 80) }))
+                );
+                console.log(`  Download links found: ${downloadLinks.length}`);
+                downloadLinks.slice(0, 5).forEach(link => {
+                  console.log(`    ${link.text}: ${link.href}`);
+                });
+                
+                // Click the first download link
+                if (downloadLinks.length > 0) {
+                  const firstLink = downloadLinks[0].href;
+                  if (firstLink && firstLink.startsWith('http')) {
+                    console.log(`  Clicking: ${firstLink.substring(0, 100)}`);
+                    try {
+                      await page.goto(firstLink, { waitUntil: 'networkidle', timeout: 20000 });
+                      console.log(`  Current URL: ${page.url().substring(0, 150)}`);
+                      
+                      // Wait for any redirects or downloads
+                      await page.waitForTimeout(5000);
+                      
+                      // Check page content for download triggers
+                      const pageContent = await page.content();
+                      const mp4Urls = pageContent.match(/https?:\/\/[^"'\s]+\.(?:mp4|mkv|webm)[^"'\s]*/gi) || [];
+                      console.log(`  MP4/MKV URLs on page: ${mp4Urls.length}`);
+                      mp4Urls.slice(0, 3).forEach(u => console.log(`    ${u.substring(0, 120)}`));
+                      
+                      // Look for onclick download triggers
+                      const onclickMatch = pageContent.match(/location\.href\s*=\s*['"]([^'"]+)['"]/gi) || [];
+                      console.log(`  OnClick redirects: ${onclickMatch.length}`);
+                      onclickMatch.slice(0, 3).forEach(o => console.log(`    ${o.substring(0, 120)}`));
+                      
+                    } catch(e) {
+                      console.log(`  Click error: ${e.message}`);
+                    }
+                  }
+                }
+              }
+              
+              results[site.name] = { status: 'scraped', currentUrl: page.url() };
+              await context.close();
+              
+            } catch(e) {
+              console.log(`  Error: ${e.message}`);
+              results[site.name] = { status: 'error', error: e.message };
+            }
+          }
+          
+          await browser.close();
+          
+          console.log('\n\n=== FINAL RESULTS ===');
+          console.log(JSON.stringify(results, null, 2));
+          NODEEOF
