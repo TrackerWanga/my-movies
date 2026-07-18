@@ -1,0 +1,44 @@
+name: Test Azure IP Downloads
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test Download Chains from Azure IP
+        run: |
+          echo "=== Testing from Azure IP ==="
+          echo ""
+          
+          echo "1. Net9ja → DLDownload redirect:"
+          curl -sI "https://dldownload.com.ng/sdm_downloads/above-the-line-2025/" \
+            -H "User-Agent: Mozilla/5.0" -o /dev/null -w "HTTP %{http_code} | Redirect: %{redirect_url}\n" --max-time 10
+          
+          echo ""
+          echo "2. Meetdownload accessible:"
+          curl -s -o /dev/null -w "HTTP %{http_code}\n" "https://meetdownload.com" --max-time 10
+          
+          echo ""
+          echo "3. Kissorgrab CDN:"
+          curl -s -o /dev/null -w "HTTP %{http_code}\n" "https://h213b.kissorgrab.com" --max-time 10
+          
+          echo ""
+          echo "4. Wildshare:"
+          curl -s -o /dev/null -w "HTTP %{http_code}\n" "https://wildshare.net" --max-time 10
+          
+          echo ""
+          echo "5. FZMovies.cc:"
+          curl -s -o /dev/null -w "HTTP %{http_code}\n" "https://fzmovies.cc" --max-time 10
+          
+          echo ""
+          echo "6. Full chain test - follow SDM to meetdownload:"
+          REDIRECT=$(curl -sI "https://dldownload.com.ng/sdm_downloads/above-the-line-2025/" \
+            -H "User-Agent: Mozilla/5.0" -o /dev/null -w "%{redirect_url}" --max-time 10)
+          echo "   SDM redirects to: ${REDIRECT:0:100}"
+          
+          if [ -n "$REDIRECT" ]; then
+            echo ""
+            echo "7. Extract kissorgrab from meetdownload:"
+            curl -s "$REDIRECT" -H "User-Agent: Mozilla/5.0" | grep -oP "location\.href\s*=\s*'[^']+'" | head -1
+          fi
