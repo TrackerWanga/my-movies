@@ -6,39 +6,58 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Test Download Chains from Azure IP
+      - name: Test All Download Hosts from Azure IP
         run: |
-          echo "=== Testing from Azure IP ==="
+          echo "=== Azure IP Connectivity Test ==="
           echo ""
           
-          echo "1. Net9ja → DLDownload redirect:"
-          curl -sI "https://dldownload.com.ng/sdm_downloads/above-the-line-2025/" \
-            -H "User-Agent: Mozilla/5.0" -o /dev/null -w "HTTP %{http_code} | Redirect: %{redirect_url}\n" --max-time 10
+          # Test all hosts
+          for host in \
+            "https://netfilm.world" \
+            "https://h5-api.aoneroom.com" \
+            "https://h5.aoneroom.com/wefeed-h5api-bff/media-player/get-domain" \
+            "https://dldownload.com.ng" \
+            "https://meetdownload.com" \
+            "https://wildshare.net" \
+            "https://fzmovies.cc" \
+            "https://fzmovies.live" \
+            "https://mobiletvshows.site" \
+            "https://tvseries.in" \
+            "https://www.net9ja.tv" \
+            "https://net9jaseries.com" \
+            "https://www.naijaprey.tv" \
+            "https://bcdnxw.hakunaymatata.com" \
+            "https://h213b.kissorgrab.com" \
+            "https://zoologyfibre.com"; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$host" -H "User-Agent: Mozilla/5.0" --max-time 8)
+            echo "  $host → HTTP $code"
+          done
           
           echo ""
-          echo "2. Meetdownload accessible:"
-          curl -s -o /dev/null -w "HTTP %{http_code}\n" "https://meetdownload.com" --max-time 10
-          
-          echo ""
-          echo "3. Kissorgrab CDN:"
-          curl -s -o /dev/null -w "HTTP %{http_code}\n" "https://h213b.kissorgrab.com" --max-time 10
-          
-          echo ""
-          echo "4. Wildshare:"
-          curl -s -o /dev/null -w "HTTP %{http_code}\n" "https://wildshare.net" --max-time 10
-          
-          echo ""
-          echo "5. FZMovies.cc:"
-          curl -s -o /dev/null -w "HTTP %{http_code}\n" "https://fzmovies.cc" --max-time 10
-          
-          echo ""
-          echo "6. Full chain test - follow SDM to meetdownload:"
+          echo "=== Test: Can we follow SDM redirect? ==="
           REDIRECT=$(curl -sI "https://dldownload.com.ng/sdm_downloads/above-the-line-2025/" \
-            -H "User-Agent: Mozilla/5.0" -o /dev/null -w "%{redirect_url}" --max-time 10)
-          echo "   SDM redirects to: ${REDIRECT:0:100}"
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            -H "Accept: text/html,application/xhtml+xml" \
+            -H "Accept-Language: en-US,en;q=0.9" \
+            -o /dev/null -w "%{redirect_url}" --max-time 10 -L)
+          echo "  SDM redirect: ${REDIRECT:0:120}"
           
-          if [ -n "$REDIRECT" ]; then
-            echo ""
-            echo "7. Extract kissorgrab from meetdownload:"
-            curl -s "$REDIRECT" -H "User-Agent: Mozilla/5.0" | grep -oP "location\.href\s*=\s*'[^']+'" | head -1
-          fi
+          echo ""
+          echo "=== Test: netfilm.world movie stream ==="
+          curl -s "https://netfilm.world/wefeed-h5api-bff/subject/play?subjectId=4394044471852286152&se=0&ep=0&detailPath=the-furious-6lxRH1LLAe5" \
+            -H "User-Agent: Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36" \
+            -H "Referer: https://netfilm.world/spa/videoPlayPage/movies/the-furious-6lxRH1LLAe5" \
+            -H "Accept: application/json" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          streams=d.get('data',{}).get('streams',[])
+          print(f'  Streams found: {len(streams)}')
+          for s in streams[:3]:
+              print(f'    {s.get(\"resolutions\",\"?\")}p - URL: {bool(s.get(\"url\"))}')
+          " 2>/dev/null
+          
+          echo ""
+          echo "=== Test: bcdnxw CDN direct ==="
+          curl -s -o /dev/null -w "HTTP %{http_code} | Size: %{size_download} bytes\n" \
+            "https://bcdnxw.hakunaymatata.com" \
+            -H "User-Agent: Mozilla/5.0" --max-time 8
